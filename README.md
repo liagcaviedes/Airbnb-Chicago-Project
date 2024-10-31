@@ -15,7 +15,7 @@ The objective is to explore pricing, factors, neighborhood characteristics, lice
 
 The analysis includes data preprocessing, exploratory data analysis (EDA), and visualizations to help identify significant patterns and provide value to hosts and guests alike.
 
-This project has also been deployed as an interactive web app using Streamlit. You can check it out [here](https://www.linkedin.com/in/rosaliagonzalezcaviedes/)
+This project has also been deployed as an interactive web app using Streamlit. You can check it out [here](https://airbnbchicagoliagcaviedes.streamlit.app/)
 
 ## Table of Contents
 - [Project Overview](#project-overview)
