@@ -1,0 +1,1919 @@
+# %%
+import numpy as np
+import pandas as pd
+import os
+import matplotlib.pyplot as plt
+import seaborn as sns
+import plotly.express as px
+import plotly.graph_objects as go
+from sklearn.impute import KNNImputer
+from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import LabelEncoder
+import pathlib
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+
+# %% [markdown]
+# ## Understand the data
+
+# %% [markdown]
+# #### Listings Summary csv
+# I will use this csv as main dataset
+
+# %%
+# Cargar los datos
+dataset = pd.read_csv('data/listings_summary_train.csv')
+y_train = dataset['price']
+X_train = dataset.drop(['price'], axis=1)
+
+X_test = pd.read_csv('data/listings_summary_test.csv')
+
+
+# %%
+dataset.shape
+
+# %%
+dataset.info()
+
+# %%
+dataset.isnull().mean()*100
+
+# %%
+dataset.duplicated().sum()
+
+
+# %%
+dataset['price'].describe()
+
+# %%
+dataset['log_price'] = np.log1p(dataset['price'])  # log1p para incluir 0
+sns.histplot(dataset['log_price'])
+plt.show()
+
+
+# %% [markdown]
+# #### Listings csv
+
+# %%
+listings = pd.read_csv('data/listings.csv')
+listings.head()
+
+
+# %%
+print(listings.shape)
+print(listings.info())
+print(listings.duplicated().sum())
+
+# %%
+listings['neighbourhood_cleansed'].value_counts()
+
+# %%
+pd.set_option('display.max_rows', None)
+listings.isnull().mean()*100
+
+# %% [markdown]
+# #### Reviews datasets
+
+# %%
+reviews = pd.read_csv('data/reviews.csv')
+print(reviews.head())
+print(reviews.shape)
+print(reviews.info())
+print(reviews.duplicated().sum())
+print(reviews.isnull().mean()*100)
+
+# %%
+reviews_summary = pd.read_csv('data/reviews_summary.csv')
+reviews_summary.head()
+
+
+
+# %%
+print(reviews_summary.shape)
+print(reviews_summary.info())
+print(reviews_summary.duplicated().sum())
+print(reviews_summary.isnull().mean()*100)
+
+# %% [markdown]
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+# %% [markdown]
+# ## Preprocessing
+
+# %% [markdown]
+# ### Listings_summary
+# 
+# - SELECT USEFUL VARIABLES AND MERGE CSV: 
+#     - Bring variables to dataset from listings csv
+#         - Amenities
+#         - host is superhost
+#         - first_review
+#         - review_scores_rating: 
+#         - review_scores_accuracy: 
+#         - review_scores_cleanliness: 
+#         - review_scores_checkin: 
+#         - review_scores_communication: 
+#         - review_scores_location: 
+#         - review_scores_value: 
+#         - number_of_reviews_l30d
+# 
+# - NULLs
+#     - Price & Log_price: replace with Neighbourhood mean
+#     - Last review: Drop this variable, no relevant info and has nulls. 
+#     - Reviews per month: check with total reviews and see if it might be 0. Replace with value 0
+#     - License: keep it as 'No license'
+#     - Neighbourhood group: delete column
+# 
+# - DROP COLUMNS. 
+#     - Name
+#     - Host name
+# 
+# - NEW VARIABLES
+#     - District
+#     - List Amenities into variables
+# 
+# 
+
+# %% [markdown]
+# Merging csvs, nulls application and new variables
+
+# %%
+# Seleccionar las columnas necesarias de `listings`
+columns_to_merge = [
+    'id',
+    'amenities',
+    'host_is_superhost',
+    'host_total_listings_count',
+    'property_type',
+    'accommodates',
+    'bathrooms',
+    'bedrooms',
+    'first_review',
+    'review_scores_rating',
+    'review_scores_accuracy',
+    'review_scores_cleanliness',
+    'review_scores_checkin',
+    'review_scores_communication',
+    'review_scores_location',
+    'review_scores_value',
+    'number_of_reviews_l30d'
+]
+listings_subset = listings[columns_to_merge]
+
+ids_in_both = dataset['id'].isin(listings_subset['id']).sum()
+print(f"Número de IDs comunes: {ids_in_both} de {len(dataset)}")
+
+# Realiza el merge con `listings_summary`
+dataset = pd.merge(dataset, listings_subset, on='id', how='left', validate="one_to_one")
+
+# %%
+# Crear el diccionario con los barrios y sus distritos
+neighborhood_district_mapping = {
+    'Rogers Park': 'Far North Side', 'West Ridge': 'Far North Side', 'Uptown': 'Far North Side',
+    'Lincoln Square': 'Far North Side', 'Edgewater': 'Far North Side',
+    'North Park': 'Far North Side', 'Albany Park': 'Far North Side', 'O’Hare': 'Far North Side',
+    'Edison Park': 'Far North Side', 'Norwood Park': 'Far North Side', 'Jefferson Park': 'Far North Side',
+    
+    'Forest Glen': 'Northwest Side', 'North Center': 'Northwest Side', 'Dunning': 'Northwest Side',
+    'Avondale': 'Northwest Side', 'Portage Park': 'Northwest Side', 'Irving Park': 'Northwest Side',
+    'Hermosa': 'Northwest Side', 'Belmont Cragin': 'Northwest Side', 'Montclare': 'Northwest Side',
+    
+    'Lake View': 'North Side', 'Lincoln Park': 'North Side', 'Near North Side': 'North Side',
+    
+    'West Town': 'West Side', 'Austin': 'West Side', 'West Garfield Park': 'West Side', 
+    'East Garfield Park': 'West Side', 'Humboldt Park': 'West Side', 'North Lawndale': 'West Side',
+    'South Lawndale': 'West Side', 'Lower West Side': 'West Side',
+    
+    'Loop': 'Central', 'Near South Side': 'Central', 'Near West Side': 'Central',
+    
+    'Armour Square': 'South Side', 'Douglas': 'South Side', 'Oakland': 'South Side',
+    'Fuller Park': 'South Side', 'Grand Boulevard': 'South Side', 'Kenwood': 'South Side',
+    'Washington Park': 'South Side', 'Hyde Park': 'South Side', 'Woodlawn': 'South Side',
+    'South Shore': 'South Side', 'Bridgeport': 'South Side', 'Greater Grand Crossing': 'South Side',
+    
+    'Garfield Ridge': 'Southwest Side', 'Archer Heights': 'Southwest Side', 'Brighton Park': 'Southwest Side',
+    'Mckinley Park': 'Southwest Side', 'New City': 'Southwest Side', 'West Elsdon': 'Southwest Side',
+    'Gage Park': 'Southwest Side', 'Clearing': 'Southwest Side', 'West Lawn': 'Southwest Side',
+    'Chicago Lawn': 'Southwest Side',
+
+    'Englewood': 'Far Southwest Side', 'West Englewood': 'Far Southwest Side', 'Auburn Gresham': 'Far Southwest Side',
+    'Beverly': 'Far Southwest Side', 'Washington Heights': 'Far Southwest Side', 'Mount Greenwood': 'Far Southwest Side',
+    'Morgan Park': 'Far Southwest Side',
+    
+    'Chatham': 'Far Southeast Side', 'Avalon Park': 'Far Southeast Side', 'South Chicago': 'Far Southeast Side',
+    'Burnside': 'Far Southeast Side', 'Calumet Heights': 'Far Southeast Side', 'Roseland': 'Far Southeast Side',
+    'Pullman': 'Far Southeast Side', 'South Deering': 'Far Southeast Side', 'East Side': 'Far Southeast Side',
+    'West Pullman': 'Far Southeast Side', 'Riverdale': 'Far Southeast Side', 'Hegewisch': 'Far Southeast Side'
+}
+
+# Crear la nueva columna 'district' en el DataFrame 'dataset' usando map
+dataset['district'] = dataset['neighbourhood'].map(neighborhood_district_mapping)
+
+# %%
+dataset.head(3)
+
+# %%
+dataset.info()
+
+# %%
+# Calcular la media de 'price' y 'log_price' por vecindario
+mean_price_by_neighbourhood = dataset.groupby('neighbourhood')['price'].mean()
+mean_log_price_by_neighbourhood = dataset.groupby('neighbourhood')['log_price'].mean()
+
+# Función para reemplazar valores nulos con la media del vecindario
+def fill_na_with_mean(dataset, column, mean_values):
+    return dataset[column].fillna(dataset['neighbourhood'].map(mean_values))
+
+# Reemplazar valores nulos en 'price' y 'log_price'
+dataset['price'] = fill_na_with_mean(dataset, 'price', mean_price_by_neighbourhood)
+dataset['log_price'] = fill_na_with_mean(dataset, 'log_price', mean_log_price_by_neighbourhood)
+
+# Verificar que no hay valores nulos en 'price' y 'log_price'
+print(dataset[['price', 'log_price']].isnull().sum())
+
+# %%
+dataset.columns
+
+# %%
+print((listings['number_of_reviews'] == 0).value_counts())
+
+
+# %%
+dataset['reviews_per_month'].fillna(0, inplace=True)
+dataset['last_review'].fillna(0, inplace=True)
+dataset['review_scores_accuracy'].fillna(0, inplace=True)
+dataset['review_scores_rating'].fillna(0, inplace=True)
+dataset['review_scores_cleanliness'].fillna(0, inplace=True)
+dataset['review_scores_checkin'].fillna(0, inplace=True)
+dataset['review_scores_communication'].fillna(0, inplace=True)
+dataset['review_scores_location'].fillna(0, inplace=True)
+dataset['review_scores_value'].fillna(0, inplace=True)
+dataset['number_of_reviews_l30d'].fillna(0, inplace=True)
+dataset['first_review'].fillna(0, inplace=True)
+
+
+
+# %%
+dataset['number_of_reviews_l30d'].fillna(0, inplace=True)
+
+# %%
+dataset.drop(columns=['neighbourhood_group'], inplace=True)
+
+# %%
+dataset['license'].fillna('No License', inplace=True)
+
+# %%
+dataset['host_is_superhost'].fillna('f', inplace=True)
+
+# %%
+dataset['host_is_superhost'] = dataset['host_is_superhost'].map({'f': 0, 't': 1})
+
+# %%
+dataset['district'].fillna('Unknown', inplace=True)
+
+# %%
+dataset.isnull().mean()*100
+
+# %%
+dataset['bathrooms'].mode()
+
+# %%
+dataset['bathrooms'].fillna(dataset['bathrooms'].mode(), inplace=True)
+
+# %%
+dataset['bedrooms'].describe()
+
+# %%
+dataset['first_review'].fillna(0, inplace=True)
+
+# %%
+# Mostrar las primeras filas de la columna 'amenities'
+dataset['amenities'].value_counts().head(20)
+
+# %%
+# Crear nuevas columnas basadas en la variable 'amenities'
+dataset['wifi'] = dataset['amenities'].apply(lambda x: 1 if 'Wifi' in x else 0)
+dataset['gym'] = dataset['amenities'].apply(lambda x: 1 if 'Gym' in x else 0)
+dataset['pool'] = dataset['amenities'].apply(lambda x: 1 if 'Pool' in x else 0)
+dataset['air_conditioning'] = dataset['amenities'].apply(lambda x: 1 if 'Air conditioning' in x else 0)
+dataset['heating'] = dataset['amenities'].apply(lambda x: 1 if 'Heating' in x else 0)
+dataset['parking'] = dataset['amenities'].apply(lambda x: 1 if 'parking' in x else 0)
+
+# %%
+dataset.head()
+
+# %%
+dataset.isnull().mean()*100
+
+# %%
+dataset['bathrooms'].fillna(dataset['bathrooms'].mean(), inplace=True)
+
+# %%
+dataset['bedrooms'].fillna(0, inplace=True)
+
+# %%
+dataset.isnull().mean()*100
+
+# %%
+dataset['last_review'].fillna(0, inplace=True)
+
+# %%
+dataset.isnull().mean()*100
+
+# %% [markdown]
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+# %% [markdown]
+# ## EDA
+# I will perfom EDA on groups of variables to understand further the variables. 
+# 
+# #### 1. Reviews
+# - Merge columns from listings to dataset. 
+# - Visualizations
+#     
+# #### 2. Type of Host
+# - Merge columns from listings to dataset. 
+# - Visualizations
+# #### 3. Neighbouhoods
+# - Merge columns from listings to dataset. 
+# - Visualizations
+# #### 4. Availability and Min.Stays
+# 
+# #### 5. Price
+# 
+# #### 6. TOP 10s
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+# %% [markdown]
+# ### 1. EDA of Reviews Topic
+
+# %% [markdown]
+# Number of Reviews over the time
+
+# %%
+# Asegúrate de que la columna 'date' esté en formato de fecha
+reviews_summary['date'] = pd.to_datetime(reviews_summary['date'])
+
+# Agrupa las fechas por mes
+reviews_summary['month'] = reviews_summary['date'].dt.to_period('M').dt.to_timestamp()  # Convierte a periodo mensual y luego a timestamp
+reviews_summary_grouped = reviews_summary.groupby('month').size().reset_index(name='count')
+
+# Crea el gráfico de línea
+plt.figure(figsize=(12, 6))
+plt.plot(reviews_summary_grouped['month'], reviews_summary_grouped['count'], color='#FF5A5F', linewidth=2)
+plt.xlabel('Month')
+plt.ylabel('Count of Reviews')
+plt.title('Monthly Count of Reviews')
+plt.grid(False)  # Quitar las líneas del grid
+plt.gca().spines['top'].set_visible(False)  # Quitar borde superior
+plt.gca().spines['right'].set_visible(False)  # Quitar borde derecho
+plt.gca().spines['left'].set_visible(False)  # Quitar borde izquierdo
+plt.gca().spines['bottom'].set_visible(False)  # Quitar borde inferior
+plt.show()
+
+
+
+# %%
+# Convierte la columna 'date' a datetime y filtra a partir de 2011
+reviews['date'] = pd.to_datetime(reviews['date'])
+reviews['month'] = reviews['date'].dt.to_period('M').dt.to_timestamp()
+reviews = reviews[reviews['month'] >= '2011-01-01']
+
+# Realiza el merge entre `listings_summary` y `reviews` en `listing_id`
+merged_df = pd.merge(reviews, dataset[['id', 'price', 'review_scores_rating']], 
+                     left_on='listing_id', right_on='id', how='inner')
+
+# Convierte el precio a un tipo numérico si es necesario
+merged_df['price'] = pd.to_numeric(merged_df['price'].replace('[\$,]', '', regex=True), errors='coerce')
+
+# Agrupa por mes y calcula el promedio de `price` y `review_scores_rating`
+monthly_avg = merged_df.groupby('month')[['price', 'review_scores_rating']].mean().reset_index()
+
+# Grafica
+fig, ax1 = plt.subplots(figsize=(12, 6))
+
+# Grafico para `price`
+ax1.set_xlabel('Month')
+ax1.set_ylabel('Average Price', color='#767676')
+ax1.plot(monthly_avg['month'], monthly_avg['price'], color='#767676', label='Average Price')
+ax1.tick_params(axis='y', labelcolor='#767676')
+
+# Crea un segundo eje y para `review_scores_rating`
+ax2 = ax1.twinx()
+ax2.set_ylabel('Average Review Score Rating', color='#FF5A5F')
+ax2.plot(monthly_avg['month'], monthly_avg['review_scores_rating'], color='#FF5A5F', label='Average Review Score Rating')
+ax2.tick_params(axis='y', labelcolor='#FF5A5F')
+
+# Configuración final
+fig.suptitle('Average Price vs. Review Score Rating Over Time')
+fig.tight_layout()
+fig.legend(loc='upper right')
+
+# Quitar las líneas de grid y los bordes
+ax1.grid(False)
+ax2.grid(False)
+for spine in ax1.spines.values():
+    spine.set_visible(False)
+for spine in ax2.spines.values():
+    spine.set_visible(False)
+
+plt.show()
+
+
+
+# %%
+# Convierte la columna 'date' a datetime
+reviews['date'] = pd.to_datetime(reviews['date'])
+
+# Agrupa por mes y convierte las fechas a períodos mensuales
+reviews['month'] = reviews['date'].dt.to_period('M').dt.to_timestamp()
+
+reviews = reviews[reviews['month'] >= '2011-01-01']
+
+
+# Realiza el merge entre `listings_summary` y `reviews` en `listing_id`
+merged_df = pd.merge(reviews, dataset[['id', 'price', 'reviews_per_month']], 
+                     left_on='listing_id', right_on='id', how='inner')
+
+# Convierte el precio a un tipo numérico si es necesario (remueve símbolos como '$' si están presentes)
+merged_df['price'] = pd.to_numeric(merged_df['price'].replace('[\$,]', '', regex=True), errors='coerce')
+
+# Agrupa por mes y calcula el promedio de `price` y `reviews_per_month`
+monthly_avg = merged_df.groupby('month')[['price', 'reviews_per_month']].mean().reset_index()
+
+# Grafica
+fig, ax1 = plt.subplots(figsize=(12, 6))
+
+# Grafico para `price`
+ax1.set_xlabel('Month')
+ax1.set_ylabel('Average Price', color='#767676')
+ax1.plot(monthly_avg['month'], monthly_avg['price'], color='#767676', label='Average Price')
+ax1.tick_params(axis='y', labelcolor='#767676')
+
+# Crea un segundo eje y para `review_scores_rating`
+ax2 = ax1.twinx()
+ax2.set_ylabel('Average Review Score Rating', color='#FF5A5F')
+ax2.plot(monthly_avg['month'], monthly_avg['reviews_per_month'], color='#FF5A5F', label='Reviews per Month')
+ax2.tick_params(axis='y', labelcolor='#FF5A5F')
+
+fig.suptitle('Average Price vs. Review per Month Over Time')
+fig.tight_layout()
+fig.legend(loc='upper right')
+
+ax1.grid(False)
+ax2.grid(False)
+for spine in ax1.spines.values():
+    spine.set_visible(False)
+for spine in ax2.spines.values():
+    spine.set_visible(False)
+plt.show()
+
+# %%
+# Convierte la columna 'date' a datetime
+reviews['date'] = pd.to_datetime(reviews['date'])
+
+# Agrupa por mes y convierte las fechas a períodos mensuales
+reviews['month'] = reviews['date'].dt.to_period('M').dt.to_timestamp()
+
+# Realiza el merge entre `listings_summary` y `reviews` en `listing_id`
+merged_df = pd.merge(reviews, dataset[['id', 'price', 'reviews_per_month']], 
+                     left_on='listing_id', right_on='id', how='inner')
+
+# Convierte el precio a un tipo numérico si es necesario (remueve símbolos como '$' si están presentes)
+merged_df['price'] = pd.to_numeric(merged_df['price'].replace('[\$,]', '', regex=True), errors='coerce')
+
+# Agrupa por mes y calcula el promedio de `price` y `review_scores_rating`
+monthly_avg = merged_df.groupby('month')[['price', 'reviews_per_month']].mean().reset_index()
+
+# Grafica
+fig, ax1 = plt.subplots(figsize=(12, 6))
+
+# Grafico para `price`
+ax1.set_xlabel('Month')
+ax1.set_ylabel('Average Price', color='#767676')
+ax1.plot(monthly_avg['month'], monthly_avg['price'], color='#767676', label='Average Price')
+ax1.tick_params(axis='y', labelcolor='#767676')
+
+# Crea un segundo eje y para `review_scores_rating`
+ax2 = ax1.twinx()
+ax2.set_ylabel('Average Review Score Rating', color='#FF5A5F')
+ax2.plot(monthly_avg['month'], monthly_avg['reviews_per_month'], color='#FF5A5F', label='Average Review Score Rating')
+ax2.tick_params(axis='y', labelcolor='#FF5A5F')
+
+fig.suptitle('Average Price vs. Review per Month Over Time')
+fig.tight_layout()
+fig.legend(loc='upper right')
+
+plt.grid(False)  # Quitar las líneas del grid
+plt.gca().spines['top'].set_visible(False)  # Quitar borde superior
+plt.gca().spines['right'].set_visible(False)  # Quitar borde derecho
+plt.gca().spines['left'].set_visible(False)  # Quitar borde izquierdo
+plt.gca().spines['bottom'].set_visible(False)  # Quitar borde inferior
+plt.show()
+
+# %%
+
+# Convierte la columna 'date' a datetime en caso de no haberlo hecho
+reviews['date'] = pd.to_datetime(reviews['date'])
+
+# Agrupa las fechas en meses
+reviews['month'] = reviews['date'].dt.to_period('M').dt.to_timestamp()
+
+# Realiza el merge entre `listings_summary` y `reviews` para obtener las variables de puntuación
+merged_df = pd.merge(reviews, dataset[['id', 'review_scores_rating', 'review_scores_accuracy', 
+                                                'review_scores_cleanliness', 'review_scores_checkin', 
+                                                'review_scores_communication', 'review_scores_location', 
+                                                'review_scores_value']],
+                     left_on='listing_id', right_on='id', how='inner')
+
+# Agrupa por mes y calcula el promedio mensual para cada variable de puntuación
+monthly_scores = merged_df.groupby('month')[['review_scores_rating', 'review_scores_accuracy', 
+                                             'review_scores_cleanliness', 'review_scores_checkin', 
+                                             'review_scores_communication', 'review_scores_location', 
+                                             'review_scores_value']].mean().reset_index()
+
+# Configura el gráfico
+plt.figure(figsize=(14, 8))
+
+# Grafica cada variable en el mismo gráfico de líneas
+for column in monthly_scores.columns[1:]:
+    plt.plot(monthly_scores['month'], monthly_scores[column], label=column)
+
+# Personalización del gráfico
+plt.xlabel('Month')
+plt.ylabel('Average Score')
+plt.title('Monthly Evolution of Review Scores')
+plt.legend(title="Review Scores")
+plt.xticks(rotation=45)
+plt.grid(True)
+plt.show()
+
+
+# %%
+
+# Convertir las columnas a tipo datetime
+dataset['first_review'] = pd.to_datetime(dataset['first_review'], errors='coerce')
+dataset['last_review'] = pd.to_datetime(dataset['last_review'], errors='coerce')
+
+# Crear un DataFrame que cuente el número de reseñas por mes
+first_review_counts = dataset['first_review'].dt.to_period('M').value_counts().sort_index()
+last_review_counts = dataset['last_review'].dt.to_period('M').value_counts().sort_index()
+
+# Crear un DataFrame combinado
+comparison_df = pd.DataFrame({
+    'First Review': first_review_counts,
+    'Last Review': last_review_counts
+}).fillna(0)
+
+# Graficar
+plt.figure(figsize=(12, 6))
+comparison_df.plot(kind='line', marker='o')
+plt.title('Comparison of First and Last Reviews Over Time')
+plt.xlabel('Date (Year-Month)')
+plt.ylabel('Count of Reviews')
+plt.xticks(rotation=45)
+plt.legend(title='Review Type')
+plt.grid()
+plt.tight_layout()
+plt.show()
+
+
+# %%
+#elimino los 3 ultimos meses para visualizar mejor
+
+# Convertir las columnas a tipo datetime
+dataset['first_review'] = pd.to_datetime(dataset['first_review'], errors='coerce')
+dataset['last_review'] = pd.to_datetime(dataset['last_review'], errors='coerce')
+
+# Calcular la fecha actual y la fecha de corte
+current_date = pd.to_datetime("now")
+cutoff_date = current_date - pd.DateOffset(months=6)
+
+# Filtrar el DataFrame para quitar los datos de los últimos 3 meses
+filtered_summary = dataset[
+    (dataset['first_review'] < cutoff_date) & 
+    (dataset['last_review'] < cutoff_date)
+]
+
+# Crear un DataFrame que cuente el número de reseñas por mes
+first_review_counts = filtered_summary['first_review'].dt.to_period('M').value_counts().sort_index()
+last_review_counts = filtered_summary['last_review'].dt.to_period('M').value_counts().sort_index()
+
+# Crear un DataFrame combinado
+comparison_df = pd.DataFrame({
+    'First Review': first_review_counts,
+    'Last Review': last_review_counts
+}).fillna(0)
+
+# Graficar
+plt.figure(figsize=(12, 6))
+comparison_df.plot(kind='line')
+plt.title('Comparison of First and Last Reviews Over Time (Excluding Last 6 Months)')
+plt.xlabel('Date (Year-Month)')
+plt.ylabel('Count of Reviews')
+plt.xticks(rotation=45)
+plt.legend(title='Review Type')
+plt.grid()
+plt.tight_layout()
+plt.show()
+
+
+# %%
+dataset['number_of_reviews_ltm'].describe().round(2).T
+
+# %%
+dataset['reviews_per_month'].describe().round(2).T
+
+# %% [markdown]
+# ### 2. EDA of Host Topic
+
+# %% [markdown]
+# ### 3. EDA of Neighbourhoods Topic
+
+# %%
+dataset['neighbourhood'].unique().shape
+
+# %%
+dataset.columns
+
+# %%
+# Agrupa por vecindario y calcula el promedio de reviews_per_month
+df_grouped = dataset.groupby('district')['reviews_per_month'].mean().reset_index()
+
+# Ordena de mayor a menor para una mejor visualización
+df_grouped = df_grouped.sort_values(by='reviews_per_month', ascending=False)
+
+# Crea el gráfico de barras
+plt.figure(figsize=(12, 8))
+plt.barh(df_grouped['district'], df_grouped['reviews_per_month'], color='cornflowerblue')
+plt.xlabel('Average Reviews per Month')
+plt.ylabel('district')
+plt.title('Average Reviews per Month by Neighborhood')
+plt.gca().invert_yaxis()  # Invierte el eje y para que el vecindario con más reviews esté en la parte superior
+plt.show()
+
+# %% [markdown]
+# ### 4. EDA of Availability Topic
+
+# %%
+sns.boxplot(x=dataset['minimum_nights'])
+plt.show()
+
+
+
+# %% [markdown]
+# #### HOSTS
+
+# %%
+# Asegúrate de que la columna 'date' esté en formato datetime
+reviews['date'] = pd.to_datetime(reviews['date'])
+
+# Agrupa por mes y convierte las fechas a períodos mensuales
+reviews['month'] = reviews['date'].dt.to_period('M').dt.to_timestamp()
+
+# Realiza el merge entre `listings` y `reviews` para incluir la columna `host_is_superhost`
+merged_df = pd.merge(reviews, listings[['id', 'price', 'host_is_superhost']], 
+                     left_on='listing_id', right_on='id', how='inner')
+
+# Convierte el precio a un tipo numérico si es necesario (remueve símbolos como '$' si están presentes)
+merged_df['price'] = pd.to_numeric(merged_df['price'].replace('[\$,]', '', regex=True), errors='coerce')
+
+# Convierte la columna `host_is_superhost` a numérica (1 para True, 0 para False)
+merged_df['host_is_superhost'] = merged_df['host_is_superhost'].apply(lambda x: 1 if x == 't' else 0)
+
+# Agrupa por mes y calcula el promedio de `price` y la proporción de `superhosts`
+monthly_avg = merged_df.groupby('month').agg({'price': 'mean', 'host_is_superhost': 'mean'}).reset_index()
+
+# Grafica
+fig, ax1 = plt.subplots(figsize=(12, 6))
+
+# Grafico para `price`
+ax1.set_xlabel('Month')
+ax1.set_ylabel('Average Price', color='teal')
+ax1.plot(monthly_avg['month'], monthly_avg['price'], color='teal', label='Average Price')
+ax1.tick_params(axis='y', labelcolor='teal')
+
+# Crea un segundo eje y para `host_is_superhost`
+ax2 = ax1.twinx()
+ax2.set_ylabel('Proportion of Superhosts', color='coral')
+ax2.plot(monthly_avg['month'], monthly_avg['host_is_superhost'], color='coral', label='Proportion of Superhosts')
+ax2.tick_params(axis='y', labelcolor='coral')
+
+fig.suptitle('Average Price vs. Proportion of Superhosts Over Time')
+fig.tight_layout()
+fig.legend(loc='upper right')
+plt.show()
+
+# %%
+# Crear un gráfico de caja para comparar 'room_type' y 'price' Crear un gráfico de caja para comparar 'room_type' y 'price' Crear un gráfico de caja para comparar 'room_type' y 'price'
+plt.figure(figsize=(10, 6))
+sns.boxplot(x='room_type', y='price', data=dataset, palette='viridis')
+plt.title('Comparison of Room Type and Price')
+plt.xlabel('Room Type')
+plt.ylabel('Price')
+plt.show()
+
+# %%
+# Crear un gráfico de caja para comparar 'room_type' y 'price' Crear un gráfico de caja para comparar 'room_type' y 'price' Crear un gráfico de caja para comparar 'room_type' y 'price'
+plt.figure(figsize=(10, 6))
+sns.boxplot(x='room_type', y='log_price', data=dataset)
+plt.title('Comparison of Room Type and Price')
+plt.xlabel('Room Type')
+plt.ylabel('Price')
+plt.show()
+
+# %%
+sns.relplot(data = dataset, x = 'neighbourhood', y = 'log_price', hue = 'log_price')
+
+# %%
+dataset['price'].describe()
+
+# %% [markdown]
+# ### TOP 10s
+
+# %%
+#saca un grafico con los top 10 barrios con precios mas altos
+top_10_neighbourhoods = dataset.groupby('neighbourhood')['price'].mean().sort_values(ascending=False).head(10)
+top_10_neighbourhoods = top_10_neighbourhoods.reset_index()
+fig = px.bar(top_10_neighbourhoods, x='neighbourhood', y='price', color='price', title='Top 10 Neighborhoods with Highest Average Price')
+fig.show()
+
+
+# %%
+# Calcular el número total de alojamientos y el precio promedio por vecindario
+neighbourhood_stats = dataset.groupby('neighbourhood').agg(
+    total_listings=('id', 'count'),
+    avg_price=('price', 'mean')
+).sort_values(by='avg_price', ascending=False).head(10).reset_index()
+
+# Crear el gráfico
+fig, ax1 = plt.subplots(figsize=(12, 8))
+
+# Gráfico de barras para el número total de alojamientos
+bars = ax1.bar(neighbourhood_stats['neighbourhood'], neighbourhood_stats['total_listings'], color='cornflowerblue', label='Total Listings')
+ax1.set_xlabel('Neighbourhood')
+ax1.set_ylabel('Total Listings', color='cornflowerblue')
+ax1.tick_params(axis='y', labelcolor='cornflowerblue')
+
+# Añadir etiquetas a las barras
+for bar in bars:
+    yval = bar.get_height()
+    ax1.text(bar.get_x() + bar.get_width()/2, yval, int(yval), va='bottom', ha='center', color='black')
+
+# Crear un segundo eje y para el precio promedio
+ax2 = ax1.twinx()
+ax2.scatter(neighbourhood_stats['neighbourhood'], neighbourhood_stats['avg_price'], color='coral', marker='o', label='Average Price')
+ax2.set_ylabel('Average Price', color='coral')
+ax2.tick_params(axis='y', labelcolor='coral')
+
+# Título y leyenda
+fig.suptitle('Top 10 Neighbourhoods with Highest Average Price and Total Listings')
+fig.tight_layout()
+fig.legend(loc='upper left', bbox_to_anchor=(0.1, 0.9))
+
+plt.show()
+
+# %%
+# Obtener los top 10 hosts con más alojamientos
+top_10_hosts = dataset['host_id'].value_counts().head(10).reset_index()
+top_10_hosts.columns = ['host_id', 'total_listings']
+
+# Unir con el nombre del host
+top_10_hosts = top_10_hosts.merge(dataset[['host_id', 'host_name']].drop_duplicates(), on='host_id')
+
+# Crear el gráfico
+fig = px.bar(top_10_hosts, x='host_name', y='total_listings', color='total_listings', title='Top 10 Hosts with Most Listings')
+fig.show()
+
+# %%
+dataset['host_name'].value_counts().sort_values(ascending=False).head(10)
+
+# %%
+dataset['review_scores_rating'].mean()
+
+# %%
+dataset['bedrooms'].value_counts()
+
+# %%
+listings.shape
+
+# %%
+# Obtener los top 10 apartamentos más reservados basados en el número total de reseñas
+top_10_booked_apartments = dataset.nlargest(10, 'number_of_reviews')[['id', 'name', 'number_of_reviews']]
+
+# Mostrar el listado
+print(top_10_booked_apartments)
+# Crear el gráfico de barras
+plt.figure(figsize=(12, 6))
+plt.bar(top_10_booked_apartments['name'], top_10_booked_apartments['number_of_reviews'], color='skyblue')
+plt.xlabel('Apartment Name')
+plt.ylabel('Number of Reviews')
+plt.title('Top 10 Most Booked Apartments Based on Number of Reviews')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+
+# %%
+import plotly.express as px
+
+# Obtener los top 10 apartamentos más reservados basados en el número total de reseñas
+top_10_booked_apartments = dataset.nlargest(10, 'number_of_reviews')[['id', 'name', 'number_of_reviews', 'latitude', 'longitude']]
+
+# Crear el gráfico de mapa
+fig = px.scatter_mapbox(
+    top_10_booked_apartments,
+    lat='latitude',
+    lon='longitude',
+    hover_name='name',
+    hover_data=['number_of_reviews'],
+    color_discrete_sequence=["fuchsia"],
+    zoom=10,
+    height=600
+)
+
+fig.update_layout(mapbox_style="open-street-map")
+fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
+fig.show()
+
+# %%
+# Calcular el precio promedio basado en si el host es superhost o no
+average_price_superhost = dataset.groupby('host_is_superhost')['price'].mean().reset_index()
+
+# Convertir 'host_is_superhost' a una variable categórica para la visualización
+average_price_superhost['host_is_superhost'] = average_price_superhost['host_is_superhost'].apply(lambda x: 'Yes' if x == 1 else 'No')
+
+# Colores personalizados
+colors = {'Yes': '#FF5A5F', 'No': '#767676'}
+
+# Crear el gráfico de barras
+plt.figure(figsize=(10, 6))
+sns.barplot(x='host_is_superhost', y='price', data=average_price_superhost, palette=colors)
+
+# Añadir anotaciones de valores en el centro de cada barra
+for index, row in average_price_superhost.iterrows():
+    plt.text(index, row['price'] / 2, f"{row['price']:.2f}", color='white', ha="center", fontsize=12)
+
+# Configuración de etiquetas y título
+plt.title('Average Price vs. Host is Superhost')
+plt.xlabel('Host is Superhost')
+plt.ylabel('Average Price')
+
+# Eliminar grid y bordes
+plt.grid(False)
+plt.gca().spines['top'].set_visible(False)
+plt.gca().spines['right'].set_visible(False)
+plt.gca().spines['left'].set_visible(False)
+plt.gca().spines['bottom'].set_visible(False)
+
+plt.show()
+
+
+
+
+
+# %%
+# Calculate the average price based on whether the host is a superhost or not
+average_review_score_superhost = dataset.groupby('host_is_superhost')['review_scores_rating'].mean().reset_index()
+
+# Convert 'host_is_superhost' to a categorical variable for better visualization
+average_review_score_superhost['host_is_superhost'] = average_review_score_superhost['host_is_superhost'].apply(lambda x: 'Yes' if x == 1 else 'No')
+
+# Colores personalizados
+colors = {'Yes': '#FF5A5F', 'No': '#767676'}
+
+# Create the bar plot
+plt.figure(figsize=(10, 6))
+sns.barplot(x='host_is_superhost', y='review_scores_rating', data=average_review_score_superhost, palette=colors, ci=None)
+plt.title('Average Review Score vs. Host is Superhost')
+plt.xlabel('Host is Superhost')
+plt.ylabel('Average Review Score')
+
+# Eliminar grid y bordes
+plt.grid(False)
+plt.gca().spines['top'].set_visible(False)
+plt.gca().spines['right'].set_visible(False)
+plt.gca().spines['left'].set_visible(False)
+plt.gca().spines['bottom'].set_visible(False)
+plt.show()
+
+# %%
+# Convertir la columna 'date' a datetime
+reviews['date'] = pd.to_datetime(reviews['date'])
+
+# Agrupar por mes y convertir las fechas a períodos mensuales
+reviews['month'] = reviews['date'].dt.to_period('M').dt.to_timestamp()
+
+# Realizar el merge entre `reviews` y `dataset` para obtener la columna `host_is_superhost`
+merged_reviews = pd.merge(reviews, dataset[['id', 'host_is_superhost']], 
+                          left_on='listing_id', right_on='id', how='inner')
+
+# Agrupar por mes y por si el host es superhost o no, y contar el número de reviews
+reviews_grouped = merged_reviews.groupby(['month', 'host_is_superhost']).size().reset_index(name='count')
+
+# Convertir 'host_is_superhost' a una variable categórica para un mejor manejo en la gráfica
+reviews_grouped['host_is_superhost'] = reviews_grouped['host_is_superhost'].map({1: 'Yes', 0: 'No'})
+
+# Crear el gráfico
+plt.figure(figsize=(12, 6))
+sns.lineplot(data=reviews_grouped, x='month', y='count', hue='host_is_superhost', 
+             palette={'No': '#767676', 'Yes': '#FF5A5F'}, hue_order=['No', 'Yes'])
+
+plt.xlabel('Month')
+plt.ylabel('Number of Reviews')
+plt.title('Evolution of Number of Reviews Over Time by Superhost Status')
+
+# Ajustar la leyenda
+plt.legend(title='Superhost', loc='upper left')
+
+plt.grid(False)
+plt.gca().spines['top'].set_visible(False)
+plt.gca().spines['right'].set_visible(False)
+plt.gca().spines['left'].set_visible(False)
+plt.gca().spines['bottom'].set_visible(False)
+plt.show()
+
+
+# %% [markdown]
+# #Para crear el gráfico que muestra los alojamientos que han reservado 90 noches o menos y los que han reservado 90 noches o más durante este año, primero necesitamos calcular el número de noches reservadas utilizando el ratio reserva/review de 0.30. Luego, podemos agrupar los datos y crear el gráfico de barras.
+# 
+# Aquí está el código para hacerlo:
+# 
+# ```python
+# # Filtrar las reviews de este año
+# current_year = pd.to_datetime("now").year
+# reviews_this_year = reviews[reviews['date'].dt.year == current_year]
+# 
+# # Calcular el número de noches reservadas
+# reviews_this_year['nights_reserved'] = reviews_this_year.groupby('listing_id')['listing_id'].transform('count') / 0.30
+# 
+# # Crear una columna para clasificar los alojamientos
+# reviews_this_year['reservation_category'] = reviews_this_year['nights_reserved'].apply(lambda x: '90 noches o menos' if x <= 90 else '90 noches o más')
+# 
+# # Contar el número de alojamientos en cada categoría
+# reservation_counts = reviews_this_year.groupby('reservation_category')['listing_id'].nunique().reset_index()
+# reservation_counts.columns = ['reservation_category', 'count']
+# 
+# # Crear el gráfico de barras
+# plt.figure(figsize=(10, 6))
+# sns.barplot(x='reservation_category', y='count', data=reservation_counts, palette='viridis')
+# 
+# # Añadir anotaciones de valores en el centro de cada barra
+# for index, row in reservation_counts.iterrows():
+#     plt.text(index, row['count'] / 2, f"{row['count']}", color='white', ha="center", fontsize=12)
+# 
+# # Configuración de etiquetas y título
+# plt.title('Número de Alojamientos por Categoría de Noches Reservadas')
+# plt.xlabel('Categoría de Noches Reservadas')
+# plt.ylabel('Número de Alojamientos')
+# 
+# # Eliminar grid y bordes
+# plt.grid(False)
+# plt.gca().spines['top'].set_visible(False)
+# plt.gca().spines['right'].set_visible(False)
+# plt.gca().spines['left'].set_visible(False)
+# plt.gca().spines['bottom'].set_visible(False)
+# 
+# plt.show()
+# ```
+# 
+# Este código filtrará las reviews de este año, calculará el número de noches reservadas utilizando el ratio reserva/review de 0.30, clasificará los alojamientos en dos categorías (90 noches o menos y 90 noches o más), y finalmente creará un gráfico de barras para mostrar el número de alojamientos en cada categoría.
+
+# %%
+# Filtrar las reviews de este año
+current_year = pd.to_datetime("now").year
+reviews_this_year = reviews[reviews['date'].dt.year == current_year]
+
+# Calcular el número de noches reservadas
+reviews_this_year['nights_reserved'] = reviews_this_year.groupby('listing_id')['listing_id'].transform('count') / 0.30
+
+# Crear una columna para clasificar los alojamientos
+reviews_this_year['reservation_category'] = reviews_this_year['nights_reserved'].apply(lambda x: '90 noches o menos' if x <= 90 else '90 noches o más')
+
+# Contar el número de alojamientos en cada categoría
+reservation_counts = reviews_this_year.groupby('reservation_category')['listing_id'].nunique().reset_index()
+reservation_counts.columns = ['reservation_category', 'count']
+
+# Crear el gráfico de barras
+plt.figure(figsize=(10, 6))
+sns.barplot(x='reservation_category', y='count', data=reservation_counts, palette={'90 noches o menos': '#FF5A5F', '90 noches o más': '#767676'})
+
+# Añadir anotaciones de valores en el centro de cada barra
+for index, row in reservation_counts.iterrows():
+    plt.text(index, row['count'] / 2, f"{row['count']}", color='white', ha="center", fontsize=12)
+
+# Configuración de etiquetas y título
+plt.xlabel('Number of Nights Reserved')
+plt.ylabel('Number of accomodations')
+
+# Eliminar grid y bordes
+plt.grid(False)
+plt.gca().spines['top'].set_visible(False)
+plt.gca().spines['right'].set_visible(False)
+plt.gca().spines['left'].set_visible(False)
+plt.gca().spines['bottom'].set_visible(False)
+
+plt.show()
+
+
+# %%
+# Crear una nueva columna 'license_status' para categorizar 'No License' y 'Other'
+dataset['license_status'] = dataset['license'].apply(lambda x: 'No' if x == 'No License' else 'Yes')
+
+# Contar la cantidad de cada categoría
+license_counts = dataset['license_status'].value_counts().reset_index()
+license_counts.columns = ['license_status', 'count']
+
+# Colores personalizados
+colors = {'Yes': '#FF5A5F', 'No': '#767676'}
+
+# Crear el gráfico de barras
+plt.figure(figsize=(8, 6))
+sns.barplot(x='license_status', y='count', data=license_counts, palette=colors)
+
+# Añadir anotaciones de valores en el centro de cada barra
+for index, row in license_counts.iterrows():
+    plt.text(index, row['count'] / 2, f"{row['count']}", color='white', ha="center", fontsize=12)
+
+# Configuración de etiquetas y título
+plt.title('License Status Distribution')
+plt.xlabel('License Status')
+plt.ylabel('Count')
+
+# Eliminar grid y bordes
+plt.grid(False)
+plt.gca().spines['top'].set_visible(False)
+plt.gca().spines['right'].set_visible(False)
+plt.gca().spines['left'].set_visible(False)
+plt.gca().spines['bottom'].set_visible(False)
+
+plt.show()
+
+# %% [markdown]
+# ### 4. Price
+
+# %% [markdown]
+# - Matriz de correlacion
+#     - Encoding
+# - Distribucion de la variable
+
+# %%
+sns.histplot(dataset['price'], bins=30, kde=True)
+plt.xlabel('Price')
+plt.ylabel('Frequency')
+plt.title('Distribution of Price')
+plt.show()
+
+# %%
+sns.histplot(dataset['log_price'], bins=30, kde=True)
+plt.xlabel('Price')
+plt.ylabel('Frequency')
+plt.title('Distribution of Price')
+plt.show()
+
+# %% [markdown]
+# ### CORRELATION
+
+# %%
+df_corr = dataset.copy()
+
+# %%
+df_corr.columns
+
+# %%
+['id', 'name', 'host_id', 'host_name', 'neighbourhood', 'latitude',
+       'longitude', 'room_type', 'price', 'minimum_nights',
+       'number_of_reviews', 'last_review', 'reviews_per_month',
+       'calculated_host_listings_count', 'availability_365',
+       'number_of_reviews_ltm', 'license', 'log_price', 'amenities',
+       'host_is_superhost', 'host_total_listings_count', 'property_type',
+       'accommodates', 'bathrooms', 'bedrooms', 'first_review',
+       'review_scores_rating', 'review_scores_accuracy',
+       'review_scores_cleanliness', 'review_scores_checkin',
+       'review_scores_communication', 'review_scores_location',
+       'review_scores_value', 'number_of_reviews_l30d', 'district', 'wifi',
+       'gym', 'pool', 'air_conditioning', 'heating', 'parking'],
+
+# %% [markdown]
+# Select columns for the correlation:
+# [                   'neighbourhood', 'latitude',
+#                     'longitude', 'room_type', 'price', 'minimum_nights',
+#                     'number_of_reviews', 'last_review', 'reviews_per_month',
+#                     'license', 'log_price', 'amenities',
+#                     'host_is_superhost', 'property_type',
+#                     'accommodates', 'bathrooms', 'bedrooms', 'first_review',
+#                     'review_scores_rating', 'review_scores_accuracy',
+#                     'review_scores_cleanliness', 'review_scores_checkin',
+#                     'review_scores_communication', 'review_scores_location',
+#                     'review_scores_value', 'number_of_reviews_l30d', 'district', 'wifi',
+#                     'gym', 'pool', 'air_conditioning', 'heating', 'parking']
+
+# %%
+columns_to_keep = [
+    'neighbourhood', 'latitude', 'longitude', 'room_type', 'price',
+    'number_of_reviews', 'last_review','license',
+    'host_is_superhost', 'property_type', 'accommodates', 'bathrooms', 'bedrooms', 'first_review',
+    'review_scores_rating', 'review_scores_accuracy', 'review_scores_cleanliness', 'review_scores_checkin',
+    'review_scores_communication', 'review_scores_location', 'review_scores_value',
+    'district', 'wifi', 'gym', 'pool', 'air_conditioning', 'heating', 'parking'
+]
+
+df_corr = df_corr[columns_to_keep]
+df_corr.head()
+
+
+# %%
+df_corr.info()
+
+# %%
+from sklearn.preprocessing import LabelEncoder
+
+# LabelEncoder de las variables categoricas de df_corr
+
+le = LabelEncoder()
+categories = df_corr.select_dtypes(include=['object']).columns
+for col in categories:
+    df_corr[col] = le.fit_transform(df_corr[col])
+    
+df_corr.info()
+
+
+
+
+# %%
+df_corr['price'].skew()
+
+# %%
+
+# 1. Calcular la matriz de correlación utilizando el método de Pearson
+numeric_df = df_corr.select_dtypes(include=['float64', 'int64'])
+correlation_matrix = numeric_df.corr(method='spearman')
+
+# 2. Reordenar la matriz para que 'price' esté en la primera fila y columna
+correlation_matrix = correlation_matrix[['price'] + [col for col in correlation_matrix.columns if col != 'price']]
+correlation_matrix = correlation_matrix.loc[['price'] + [col for col in correlation_matrix.index if col != 'price']]
+
+# 3. Ordenar las columnas y filas de la matriz de correlación en función de la correlación con 'price'
+correlation_matrix = correlation_matrix.loc[correlation_matrix['price'].abs().sort_values(ascending=False).index]
+
+# 4. Crear una máscara para ocultar la mitad superior de la matriz
+mask = np.triu(np.ones_like(correlation_matrix, dtype=bool))
+
+# 5. Configurar el tamaño del gráfico
+plt.figure(figsize=(12, 10))
+
+# 6. Crear un heatmap con la máscara
+sns.heatmap(correlation_matrix, mask=mask, annot=True, cmap='coolwarm', fmt='.2f', linewidths=0.5)
+
+# 7. Títulos y etiquetas
+plt.title('Matriz de Correlación (Price como Objetivo)')
+plt.show()
+
+# %%
+correlation_matrix
+
+# %%
+# Crear un gráfico de caja para comparar 'room_type' y 'price' Crear un gráfico de caja para comparar 'room_type' y 'price' Crear un gráfico de caja para comparar 'room_type' y 'price'
+plt.figure(figsize=(10, 6))
+sns.boxplot(x='district', y='log_price', data=dataset)
+plt.title('Comparison of District and Price')
+plt.xticks(rotation=45)
+plt.xlabel('district')
+plt.ylabel('Price')
+plt.show()
+
+# %%
+# Crear un gráfico de caja para comparar 'room_type' y 'price' Crear un gráfico de caja para comparar 'room_type' y 'price' Crear un gráfico de caja para comparar 'room_type' y 'price'
+plt.figure(figsize=(10, 6))
+sns.boxplot(x='room_type', y='price', data=dataset)
+plt.title('Comparison of Room Type and Price')
+plt.xticks(rotation=45)
+plt.xlabel('Room Type')
+plt.ylabel('Price')
+plt.show()
+
+# %%
+# Define the bins and labels
+bins = [0, 1, 2, 3, 4, 5, float('inf')]
+labels = ['0-1', '1-2', '2-3', '3-4', '4-5', '5+']
+
+# Create a new column 'reviews_per_month_bin' with the binned data
+dataset['reviews_per_month_bin'] = pd.cut(dataset['reviews_per_month'], bins=bins, labels=labels, right=False)
+
+# Display the first few rows to verify
+print(dataset[['reviews_per_month', 'reviews_per_month_bin']].head())
+
+# %%
+# Crear un gráfico de caja para comparar 'room_type' y 'price' Crear un gráfico de caja para comparar 'room_type' y 'price' Crear un gráfico de caja para comparar 'room_type' y 'price'
+plt.figure(figsize=(10, 6))
+sns.boxplot(x='reviews_per_month_bin', y='log_price', data=dataset)
+plt.title('Comparison of District and Price')
+plt.xticks(rotation=45)
+plt.xlabel('district')
+plt.ylabel('Price')
+plt.show()
+
+# %%
+# Assuming the number of nights booked is proportional to the number of reviews in the last 12 months (number_of_reviews_ltm)
+# and considering the minimum stay and price as factors.
+
+# Define a function to estimate the number of nights booked
+def estimate_nights_booked(row):
+    # Assuming each review represents a stay of minimum_nights
+    estimated_nights = row['number_of_reviews_ltm'] * row['minimum_nights']
+    return estimated_nights
+
+# Apply the function to the dataset
+dataset['estimated_nights_booked'] = dataset.apply(estimate_nights_booked, axis=1)
+
+# Display the first few rows to verify
+dataset[['minimum_nights', 'price', 'number_of_reviews_ltm', 'estimated_nights_booked']].head()
+
+# %%
+total_booked_nights = dataset['estimated_nights_booked'] / 0.30
+
+# %%
+# Crear una columna para clasificar los alojamientos
+dataset['reservation_category'] = dataset['estimated_nights_booked'].apply(lambda x: '90 noches o menos' if x <= 90 else '90 noches o más')
+
+# Contar el número de alojamientos en cada categoría
+reservation_counts = dataset['reservation_category'].value_counts().reset_index()
+reservation_counts.columns = ['reservation_category', 'count']
+
+# Colores personalizados
+colors = {'90 noches o menos': '#FF5A5F', '90 noches o más': '#767676'}
+
+# Crear el gráfico de barras
+plt.figure(figsize=(10, 6))
+sns.barplot(x='reservation_category', y='count', data=reservation_counts, palette=colors)
+
+# Añadir anotaciones de valores en el centro de cada barra
+for index, row in reservation_counts.iterrows():
+    plt.text(index, row['count'] / 2, f"{row['count']}", color='white', ha="center", fontsize=12)
+
+# Configuración de etiquetas y título
+plt.title('Número de Alojamientos por Categoría de Noches Reservadas')
+plt.xlabel('Categoría de Noches Reservadas')
+plt.ylabel('Número de Alojamientos')
+
+# Eliminar grid y bordes
+plt.grid(False)
+plt.gca().spines['top'].set_visible(False)
+plt.gca().spines['right'].set_visible(False)
+plt.gca().spines['left'].set_visible(False)
+plt.gca().spines['bottom'].set_visible(False)
+
+plt.show()
+
+# %%
+# Calculate the total income per property id based on the estimated nights booked and price
+dataset['total_income'] = dataset['estimated_nights_booked'] * dataset['price']
+
+# Display the first few rows to verify
+dataset[['id', 'estimated_nights_booked', 'price', 'total_income']].head()
+
+# %%
+dataset['estimated_nights_booked'].mean()
+
+# %%
+average_total_income = (dataset['total_income'].sum() / 0.80) / len(dataset['id'])
+average_total_income
+
+# %%
+average_reviews_rating = dataset['review_scores_rating'].sum()/ len(dataset['id'])
+average_reviews_rating
+
+# %%
+dataset['price'].mean()
+
+# %%
+plt.figure(figsize=(10, 6))
+sns.lineplot(x='first_review', y='price', data=dataset)
+plt.title('Comparison of First Review Date and Price')
+plt.xticks(rotation=45)
+plt.xlabel('First Review Date')
+plt.ylabel('Price')
+plt.show()
+
+
+# %%
+# Crear un gráfico de caja para comparar 'room_type' y 'price' Crear un gráfico de caja para comparar 'room_type' y 'price' Crear un gráfico de caja para comparar 'room_type' y 'price'
+plt.figure(figsize=(10, 6))
+sns.boxplot(x='minimum_nights', y='price', data=dataset)
+plt.title('Comparison of Minimum Stay and Price')
+plt.xticks(rotation=45)
+plt.xlabel('Minimum Stay')
+plt.ylabel('Price')
+plt.show()
+
+# %%
+
+def get_highly_correlated_columns(dataset, target_column, threshold=0.5):
+    # Calculate the correlation matrix
+    correlation_matrix = dataset.corr()
+    
+    # Get the correlation values for the target column
+    target_correlation = correlation_matrix[target_column]
+    
+    # Filter columns with correlation greater than the threshold
+    highly_correlated_columns = target_correlation[abs(target_correlation) > threshold].index.tolist()
+    
+    # Remove the target column from the list
+    highly_correlated_columns.remove(target_column)
+    
+    return highly_correlated_columns
+
+# Example usage
+highly_correlated_columns = get_highly_correlated_columns(df_corr, 'price')
+print(highly_correlated_columns)
+
+# %% [markdown]
+# 
+
+# %% [markdown]
+# # Map Visualizations
+
+# %%
+
+# Crear un mapa usando Plotly Express
+fig = px.scatter_mapbox(dataset, lat="latitude", lon="longitude", hover_name="name", hover_data=["neighbourhood", "price"],
+                        color_discrete_sequence=["fuchsia"], zoom=10, height=600)
+
+# Configurar el estilo del mapa
+fig.update_layout(mapbox_style="open-street-map")
+fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
+
+# Mostrar el mapa
+fig.show()
+
+# %%
+# Crear un mapa usando Plotly Express
+fig = px.scatter_mapbox(dataset, lat="latitude", lon="longitude", hover_name="name", hover_data=["district", "price"],
+                        color_discrete_sequence=["fuchsia"], zoom=10, height=600)
+
+# Configurar el estilo del mapa
+fig.update_layout(mapbox_style="open-street-map")
+fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
+
+# Mostrar el mapa
+fig.show()
+
+# %%
+# Crear un mapa usando Plotly Express
+fig = px.scatter_mapbox(dataset, lat="latitude", lon="longitude", hover_name="name", hover_data=["district", "room_type"],
+                        color="room_type", zoom=10, height=600)
+
+# Configurar el estilo del mapa
+fig.update_layout(mapbox_style="open-street-map")
+fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
+
+# Mostrar el mapa
+fig.show()
+
+# %%
+# Calcular la media del precio por vecindario
+mean_price_by_neighbourhood = dataset.groupby('neighbourhood')['price'].mean().reset_index()
+
+# Merge con el dataframe original para obtener las coordenadas
+df_merged = pd.merge(mean_price_by_neighbourhood, dataset[['neighbourhood', 'latitude', 'longitude']].drop_duplicates(), on='neighbourhood')
+
+# Crear un mapa usando Plotly Express con una gama de colores uniforme
+fig = px.scatter_mapbox(df_merged, lat="latitude", lon="longitude", hover_name="neighbourhood", hover_data=["price"],
+                        size="price", color="price", color_continuous_scale=px.colors.sequential.Viridis, size_max=15, zoom=10, height=600)
+
+# Configurar el estilo del mapa
+fig.update_layout(mapbox_style="open-street-map")
+fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
+
+# Mostrar el mapa
+fig.show()
+
+# %%
+exp_regression = setup(
+    data=df_corr_filtered,
+    target='price',
+    session_id=453,
+    verbose=True
+)
+
+
+# %%
+# Calcular la media del precio por vecindario
+mean_price_by_neighbourhood = dataset.groupby('district')['price'].mean().reset_index()
+
+# Merge con el dataframe original para obtener las coordenadas
+df_merged = pd.merge(mean_price_by_neighbourhood, dataset[['district', 'latitude', 'longitude']].drop_duplicates(), on='district')
+
+# Crear un mapa usando Plotly Express con una gama de colores uniforme
+fig = px.scatter_mapbox(df_merged, lat="latitude", lon="longitude", hover_name="district", hover_data=["price"],
+                        size="price", color="price", color_continuous_scale=px.colors.sequential.Viridis, size_max=15, zoom=10, height=600)
+
+# Configurar el estilo del mapa
+fig.update_layout(mapbox_style="open-street-map")
+fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
+
+# Mostrar el mapa
+fig.show()
+
+# %%
+mean_price_by_neighbourhood.sort_values(ascending=False)
+
+# %%
+# Calcular la media del precio por vecindario
+mean_price_by_neighbourhood = dataset.groupby('neighbourhood')['price'].mean().reset_index()
+
+# Merge con el dataframe original para obtener las coordenadas
+df_merged = pd.merge(mean_price_by_neighbourhood, dataset[['neighbourhood', 'latitude', 'longitude']].drop_duplicates(), on='neighbourhood')
+
+# Crear un mapa usando Plotly Express con una gama de colores uniforme
+fig = px.scatter_mapbox(df_merged, lat="latitude", lon="longitude", hover_name="neighbourhood", hover_data=["price"],
+                        size="price", color="price", color_continuous_scale=px.colors.sequential.Viridis, size_max=15, zoom=10, height=600)
+
+# Configurar el estilo del mapa
+fig.update_layout(mapbox_style="open-street-map")
+fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
+
+# Mostrar el mapa
+fig.show()
+
+# %%
+import folium
+from folium.plugins import FastMarkerCluster
+
+# Extraer las latitudes y longitudes del dataset
+lats = dataset['latitude'].tolist()
+lons = dataset['longitude'].tolist()
+locations = list(zip(lats, lons))
+
+# Crear el mapa centrado en Chicago
+map_chicago = folium.Map(location=[41.8781, -87.6298], zoom_start=12)
+
+# Añadir los marcadores al mapa
+FastMarkerCluster(data=locations).add_to(map_chicago)
+
+# Mostrar el mapa
+map_chicago
+
+# %%
+dataset['license'].value_counts()
+
+# %%
+# Filtrar el dataset para incluir solo los IDs que no tienen licencia
+no_license_dataset = dataset[dataset['license'] == 'No License']
+
+# Extraer las latitudes y longitudes del dataset filtrado
+lats = no_license_dataset['latitude'].tolist()
+lons = no_license_dataset['longitude'].tolist()
+locations = list(zip(lats, lons))
+
+# Crear el mapa centrado en Chicago
+map_chicago = folium.Map(location=[41.8781, -87.6298], zoom_start=12)
+
+# Añadir los marcadores al mapa
+FastMarkerCluster(data=locations).add_to(map_chicago)
+
+# Mostrar el mapa
+map_chicago
+
+
+# %%
+px.scatter_mapbox(dataset, 
+                  lat='latitude', 
+                  lon='longitude', 
+                  size='price', zoom=10, mapbox_style='carto-positron', 
+                  title='AirBnb Apartment Distribution in Amsterdam', 
+                  template= "plotly_dark", 
+                  size_max=20, animation_frame='room_type')
+
+# %%
+# 4. Calcular la matriz de correlación
+
+numeric_df = df_corr.select_dtypes(include=['float64', 'int64'])
+
+correlation_matrix = numeric_df.corr()
+
+# 5. Reordenar la matriz para que 'price' esté en la primera fila y columna
+correlation_matrix = correlation_matrix[['log_price'] + [col for col in correlation_matrix.columns if col != 'log_price']]
+correlation_matrix = correlation_matrix.loc[['log_price'] + [col for col in correlation_matrix.index if col != 'log_price']]
+
+
+# 6. Configurar el tamaño del gráfico
+plt.figure(figsize=(12, 10))
+
+# 7. Crear un heatmap
+sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', fmt='.2f', linewidths=0.5)
+
+# 8. Títulos y etiquetas
+plt.title('Matriz de Correlación (Price como Objetivo)')
+plt.show()
+
+
+# %%
+correlation_matrix.round(2)
+
+# %%
+from scipy import stats
+sns.histplot(df['review_scores_rating'], kde=True, stat="density", bins=30)  # Distribución de precios
+
+
+
+# Now plot the distribution
+
+plt.ylabel('Densidad')
+plt.title('Distribución de precios')
+
+# Mostramos QQ-plot
+fig = plt.figure()
+res = stats.probplot(df['review_scores_rating'], plot=plt)
+plt.show()
+
+# %%
+# Ejemplo de gráfico de dispersión entre log_price y number_of_reviews
+plt.figure(figsize=(10, 6))
+sns.scatterplot(data=df, x='number_of_reviews', y='log_price')
+plt.title('Relación entre número de reseñas y log_price')
+plt.xlabel('Número de Reseñas')
+plt.ylabel('Log de Precio')
+plt.show()
+
+
+# %%
+# Ejemplo de gráfico de dispersión entre log_price y number_of_reviews
+plt.figure(figsize=(10, 6))
+sns.scatterplot(data=df, x='number_of_reviews', y='neighbourhood')
+plt.title('Relación entre número de reseñas y log_price')
+plt.xlabel('Número de Reseñas')
+plt.ylabel('Log de Precio')
+plt.show()
+
+
+# %%
+# Ejemplo de gráfico de dispersión entre log_price y number_of_reviews
+plt.figure(figsize=(10, 6))
+sns.scatterplot(data=df, x='review_scores_rating', y='log_price')
+plt.title('Relación entre número de reseñas y log_price')
+plt.xlabel('Número de Reseñas')
+plt.ylabel('Log de Precio')
+plt.show()
+
+
+# %% [markdown]
+# ## Hypothesis A/B TEST
+
+# %% [markdown]
+# # Regresion model on Price
+
+# %%
+df_corr.columns
+
+# %%
+model_columns = ['accommodates', 'room_type', 'bedrooms', 'bathrooms', 'district', 'gym', 'pool','parking','license','review_scores_rating', 'price']
+
+# %%
+# Cuenta la frecuencia de cada valor en la columna price
+price_counts = df_corr['price'].value_counts()
+# Filtra los valores que tienen frecuencia igual a 1
+unique_prices = price_counts[price_counts == 1].index
+print(unique_prices)
+
+# %%
+# Filtra el DataFrame excluyendo los valores de price que solo aparecen una vez
+df_corr_filtered = df_corr[~df_corr['price'].isin(unique_prices)]
+print(f"Número de filas antes de filtrar: {df_corr.shape[0]}")
+print(f"Número de filas después de filtrar: {df_corr_filtered.shape[0]}")
+
+
+# %%
+df_corr_filtered = df_corr[model_columns]
+
+
+# %%
+from pycaret.classification import *
+from pycaret.regression import *
+
+# %%
+print(df_corr_filtered['price'].dtype)
+
+
+# %%
+exp_regression = setup(
+    data=df_corr_filtered,
+    target='price',
+    session_id=453,
+    verbose=True
+)
+
+
+# %%
+best_model = compare_models()
+
+# %% [markdown]
+# ### MODELO 2 HACIENDO ESCALADOS
+
+# %%
+df_scaled = df_corr_filtered.copy()
+
+# %%
+# Verificar la distribución de 'price'
+df_scaled['price'].hist(bins=50)
+
+
+# %%
+# Transformación logarítmica de 'price'
+df_scaled['log_price'] = np.log(df_scaled['price'] + 1)  # +1 para evitar problemas con log(0)
+
+# Verificar la nueva distribución
+df_scaled['log_price'].hist(bins=50)
+
+
+# %%
+
+
+# %%
+from sklearn.model_selection import train_test_split, KFold
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
+from sklearn.svm import SVR
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+
+# Supongamos que ya tienes un DataFrame llamado df que incluye la columna 'district'
+# df = pd.read_csv('tu_archivo.csv')  # Cargar tus datos
+
+# 1. Codificación One-Hot para 'district'
+df_dummies = pd.get_dummies(df_scaled, columns=['district', 'room_type'], drop_first=True)
+
+# 2. Selección de características
+features = ['accommodates', 'bedrooms', 'bathrooms', 'gym', 'pool', 'parking',
+            'license', 'review_scores_rating'] + [col for col in df_dummies.columns if any(x in col for x in ('district', 'room_type'))]
+
+# Asegúrate de incluir log_price como tu variable objetivo
+X = df_dummies[features]
+y = df_dummies['log_price']  # Asegúrate de que 'log_price' está en el DataFrame
+
+# 3. Partición de los datos en entrenamiento y prueba
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# 4. Escalado de datos
+scaler = StandardScaler()
+scaler.fit(X_train)  # Ajusta el scaler solo a los datos de entrenamiento
+X_train_scaled = scaler.transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# 5. Partición de datos para análisis de modelos
+n_splits = 8
+kf = KFold(n_splits=n_splits)
+
+# 6. Diccionario de modelos
+models = {
+    'OLS': LinearRegression(),
+    'SVR': SVR(),
+    'Ridge': Ridge(),
+    'Lasso': Lasso(),
+    'ElasticNet': ElasticNet(),
+    'RandomForest': RandomForestRegressor(),
+    'XGB': GradientBoostingRegressor(n_estimators=300, learning_rate=0.05, max_depth=4, 
+                                      max_features='sqrt', min_samples_leaf=15, 
+                                      min_samples_split=10, loss='huber', random_state=5)
+}
+
+# 7. Bucle para probar modelos
+for name, model in models.items():
+    print(f'Probamos modelo {name}:')
+    rmse = []
+    for train_idx, test_idx in kf.split(X_train_scaled):
+        model.fit(X_train_scaled[train_idx], y_train.iloc[train_idx])  # Fit the model
+        y_pred = model.predict(X_train_scaled[test_idx])  # Make predictions
+        rmse.append(np.sqrt(np.mean((np.expm1(y_train.iloc[test_idx]) - np.expm1(y_pred)) ** 2)))  # Calculate RMSE
+    print(f'El RMSE medio de las estimaciones es: {np.mean(rmse):.2f}')
+
+
+# %%
+
+
+# %%
+district_mapping = {
+    0: 'Hyde Park - Walk to The University of Chicago',
+    1: 'Downtown Chicago',
+    2: 'Lincoln Park',
+    3: 'West Loop',
+    4: 'North Center',
+    5: 'Chinatown',
+    6: 'Near North Side',
+    7: 'Oak Park',
+    8: 'Bridgeport',
+    9: 'South Shore'
+}
+
+
+df_scaled['district'] = df_scaled['district'].map(district_mapping)
+
+
+# %%
+df_scaled['district'].value_counts()
+
+# %%
+import joblib
+
+
+xgb_model = models['XGB']
+xgb_model.fit(X_train, y_train)
+
+joblib.dump(xgb_model, 'xgb_model.pkl')
+
+
+
+# %%
+joblib.dump(scaler, 'scaler.pkl')
+
+# %%
+plt.figure(figsize=(10, 6))
+plt.scatter(y_test, y_pred, alpha=0.6)
+plt.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--')  # Línea de referencia
+plt.title('Predicciones vs Valores Reales')
+plt.xlabel('Valores Reales')
+plt.ylabel('Predicciones')
+plt.grid()
+plt.show()
+
+
+# %%
+residuals = y_test - y_pred
+
+plt.figure(figsize=(10, 6))
+plt.scatter(y_pred, residuals, alpha=0.6)
+plt.axhline(0, color='red', linestyle='--')
+plt.title('Análisis de Residuos')
+plt.xlabel('Predicciones')
+plt.ylabel('Residuos')
+plt.grid()
+plt.show()
+
+
+# %%
+import joblib
+
+# Guarda el modelo
+joblib.dump(model, 'modelo_regresion3.pkl')
+
+
+# %%
+dataset.to_csv('dataset.csv', index=False)
+
+# %%
+calendar = pd.read_csv('data/calendar.csv')
+print(calendar.head())
+
+# %% [markdown]
+# # A/B Testing
+
+# %%
+from scipy.stats import shapiro
+from scipy.stats import mannwhitneyu
+
+# %% [markdown]
+# ### Variable Price Vs Host/SuperHost
+
+# %%
+from scipy.stats import mannwhitneyu, shapiro
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Filtrar datos para evitar valores nulos
+dataset = dataset.dropna(subset=['log_price', 'host_is_superhost'])
+
+# Filtrar datos para cada grupo
+superhost = dataset[dataset['host_is_superhost'] == True]['log_price']
+host = dataset[dataset['host_is_superhost'] == False]['log_price']
+
+# Verificar que ambas muestras tengan al menos tres observaciones
+if len(superhost) >= 3 and len(host) >= 3:
+    # Prueba de Shapiro-Wilk para normalidad
+    shapiro_test_superhost = shapiro(superhost)
+    shapiro_test_host = shapiro(host)
+    print(f"El p-valor para Shapiro-Wilk (superhost) es: {shapiro_test_superhost[1]}")
+    print(f"El p-valor para Shapiro-Wilk (host) es: {shapiro_test_host[1]}")
+
+    # Prueba de Mann-Whitney para comparar medianas
+    MW_test = mannwhitneyu(superhost, host, alternative='two-sided')
+    print(f"El p-valor obtenido en el test de Mann-Whitney es de {MW_test.pvalue}")
+    palette = {'Superhost': '#FF5A5F', 'Host': '#767676'}
+
+    # Visualización con histograma
+    dataset['group'] = dataset['host_is_superhost'].apply(lambda x: 'Superhost' if x else 'Host')
+    sns.histplot(data=dataset[dataset['log_price'] > 0], x="log_price", hue="group",
+             palette=palette, edgecolor=".3", linewidth=.5)
+    plt.xlabel('Log Price')
+    plt.title('Distribution of Log Price by Host Type')
+    plt.grid(False)
+    plt.gca().spines['top'].set_visible(False)
+    plt.gca().spines['right'].set_visible(False)
+    plt.show()
+else:
+    print("Error: Uno de los grupos no tiene suficientes observaciones para realizar la prueba.")
+
+
+# %%
+from scipy.stats import mannwhitneyu, shapiro
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Filtrar datos para evitar valores nulos
+dataset = dataset.dropna(subset=['price', 'host_is_superhost'])
+
+# Filtrar datos para cada grupo
+superhost = dataset[dataset['host_is_superhost'] == True]['price']
+host = dataset[dataset['host_is_superhost'] == False]['price']
+
+# Verificar que ambas muestras tengan al menos tres observaciones
+if len(superhost) >= 3 and len(host) >= 3:
+    # Prueba de Shapiro-Wilk para normalidad
+    shapiro_test_superhost = shapiro(superhost)
+    shapiro_test_host = shapiro(host)
+    print(f"El p-valor para Shapiro-Wilk (superhost) es: {shapiro_test_superhost[1]}")
+    print(f"El p-valor para Shapiro-Wilk (host) es: {shapiro_test_host[1]}")
+
+    # Prueba de Mann-Whitney para comparar medianas
+    MW_test = mannwhitneyu(superhost, host, alternative='two-sided')
+    print(f"El p-valor obtenido en el test de Mann-Whitney es de {MW_test.pvalue}")
+    palette = {'Superhost': '#FF5A5F', 'Host': '#767676'}
+
+    # Visualización con histograma
+    dataset['group'] = dataset['host_is_superhost'].apply(lambda x: 'Superhost' if x else 'Host')
+    sns.histplot(data=dataset[dataset['price'] > 0], x="price", hue="group",
+             palette=palette, edgecolor=".3", linewidth=.5)
+    plt.xlabel('Price')
+    plt.title('Distribution of Price by Host Type')
+    plt.grid(False)
+    plt.gca().spines['top'].set_visible(False)
+    plt.gca().spines['right'].set_visible(False)
+    
+    
+    plt.show()
+else:
+    print("Error: Uno de los grupos no tiene suficientes observaciones para realizar la prueba.")
+
+# %% [markdown]
+# ### Chi Test Room Type and Host is Superhost
+
+# %%
+import pandas as pd
+from scipy.stats import chi2_contingency
+
+# Paso 1: Preparar los datos
+# Asegúrate de que las columnas sean categóricas
+dataset['room_type'] = dataset['room_type'].astype('category')
+dataset['host_is_superhost'] = dataset['host_is_superhost'].astype('category')
+
+# Paso 2: Crear la tabla de contingencia
+contingency_table = pd.crosstab(dataset['room_type'], dataset['host_is_superhost'])
+
+# Paso 3: Realizar el test de Chi-Cuadrado
+chi2, p, dof, expected = chi2_contingency(contingency_table)
+
+# Paso 4: Interpretar los resultados
+alpha = 0.05
+print(f"Chi2: {chi2}, p-valor: {p}")
+if p < alpha:
+    print("Se rechaza la hipótesis nula: hay una asociación significativa entre room_type y host_is_superhost.")
+else:
+    print("No se puede rechazar la hipótesis nula: no hay una asociación significativa entre room_type y host_is_superhost.")
+
+
+# %%
+
+# Filtrar datos para evitar valores nulos
+dataset = dataset.dropna(subset=['estimated_nights_booked', 'host_is_superhost'])
+
+# Filtrar datos para cada grupo
+superhost = dataset[dataset['host_is_superhost'] == True]['estimated_nights_booked']
+host = dataset[dataset['host_is_superhost'] == False]['estimated_nights_booked']
+
+# Verificar que ambas muestras tengan al menos tres observaciones
+if len(superhost) >= 3 and len(host) >= 3:
+    # Prueba de Shapiro-Wilk para normalidad
+    shapiro_test_superhost = shapiro(superhost)
+    shapiro_test_host = shapiro(host)
+    print(f"El p-valor para Shapiro-Wilk (superhost) es: {shapiro_test_superhost[1]}")
+    print(f"El p-valor para Shapiro-Wilk (host) es: {shapiro_test_host[1]}")
+
+    # Prueba de Mann-Whitney para comparar medianas
+    MW_test = mannwhitneyu(superhost, host, alternative='two-sided')
+    print(f"El p-valor obtenido en el test de Mann-Whitney es de {MW_test.pvalue}")
+    palette = {'Superhost': '#FF5A5F', 'Host': '#767676'}
+
+    # Visualización con histograma
+    dataset['group'] = dataset['host_is_superhost'].apply(lambda x: 'Superhost' if x else 'Host')
+    sns.histplot(data=dataset[dataset['price'] > 0], x="price", hue="group",
+             palette=palette, edgecolor=".3", linewidth=.5)
+    plt.xlabel('estimated_nights_booked')
+    plt.title('Distribution of Price by Host Type')
+    plt.grid(False)
+    plt.gca().spines['top'].set_visible(False)
+    plt.gca().spines['right'].set_visible(False)
+    
+    
+    plt.show()
+else:
+    print("Error: Uno de los grupos no tiene suficientes observaciones para realizar la prueba.")
+
+# %%
