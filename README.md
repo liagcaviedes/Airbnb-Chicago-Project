@@ -111,4 +111,9 @@ Planned improvements:
 - Predictive Analysis: Reintegrating a predictive model for price forecasting after error resolution.
 
 ## References
- 
+- Inside Airbnb
+- NBER. National Bureau of Economic Research
+- AirDNA
+- World Business Chicago
+- Enjoy Illinois. Economic Impact of Visitors in Illinois
+- Crain's Chicago Business
