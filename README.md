@@ -65,7 +65,7 @@ Example visualization of data preprocessing results:
 <img src="img/price_vs_superhost.png" alt="Host and Superhost Vs Prices" width="800"/>
 
 
-<img src="img/licences.png" alt="Licenses current situation" width="800"/>
+<img src="img/licenses.png" alt="Licenses Current Situation at Airbnb" width="800"/>
 
 ## Application
 The Streamlit app includes:
