@@ -84,9 +84,10 @@ Power BI Dashboard:
 
 ## Results and Insights
 ### Key Insights
-- Properties in central and northern districts of Chicago tend to have higher prices.
-- Superhosts generally charge more per night and receive higher review scores.
-- Review activity peaked around 2020, with a slight decline in recent years.
+- Prices and Review Scores evolution
+- Superhosts program deep dive and its relation with higher prices. A/B test on Superhost and higher prices. 
+- Growth evolution and future perspective based on listings, roomnights and prices trends.
+- Current licenses situation according to local regulations. 
 
 ## How to Use
 Clone this repository:
@@ -107,7 +108,6 @@ The app will open in your default browser, where you can interact with the data 
 ## Future Work
 Planned improvements:
 - Enhancing Streamlit app to support additional user interactions.
-- Expanded Feature Engineering: Adding external data, such as local attractions and crime rates.
 - Predictive Analysis: Reintegrating a predictive model for price forecasting after error resolution.
 
 ## References
